@@ -28,12 +28,21 @@ import java.util.stream.Stream;
 public class ForkJoinSolver
     extends SequentialSolver
 {
-    
-    
+    // Atomic Boolean implementation for a shared goal finding state variable
     protected AtomicBoolean goalIdentified = new AtomicBoolean(false);
-    protected static ConcurrentSkipListSet<Integer> visited = new ConcurrentSkipListSet<>();
+    
+    // Visited nodes will be shared statically between threads, 
+    // hence we'll be using thread-safe implementations of HashMap
+    protected static ConcurrentSkipListSet<Integer> visited = new ConcurrentSkipListSet<>(); // 
+    
+    // Mutex/Binary semaphore for handling shared resource access
     protected static Semaphore mutex = new Semaphore(1, true);
     protected HashMap<Integer, Integer> predecessor = new HashMap<Integer, Integer>();
+    
+    /* Origin/starting node used for streamlining final pathfinding between nodes
+       Instead of rebuilding the back from forked child threads to parents, we simply
+       return the final pathFromTo state by the child that identified and moved to the
+       goal node while flagging other threads via atomic boolean for exit/returning null */
     protected static int origin = 0;
     /**
      * Creates a solver that searches in <code>maze</code> from the
@@ -69,7 +78,6 @@ public class ForkJoinSolver
     public ForkJoinSolver (ForkJoinSolver root, int start, int forkAfter) {  
         this(root.maze);
         this.predecessor = root.predecessor;
-        this.visited = root.visited;
         this.forkAfter = root.forkAfter;
         this.start = start;
         this.goalIdentified = root.goalIdentified;       
@@ -95,61 +103,72 @@ public class ForkJoinSolver
 
     private List<Integer> parallelSearch()
     {
-        if (!visited.contains(start)) {
-            int player = maze.newPlayer(start);
-            frontier.push(start);
-        while (!frontier.empty()) {
-            int current = frontier.pop();
-
-            if (goalIdentified.get() == false && maze.hasGoal(current)) {
-                if (mutex.tryAcquire()) {
-                    goalIdentified.set(true);
-                    maze.move(player, current);
-                    System.out.println("Predecessors: " + predecessor.toString());
-                    mutex.release();
-                    return pathFromTo(origin, current);
-                }
-            }
-            if (goalIdentified.get() == false && !visited.contains(current)) {
-                try {
-                    mutex.acquire();
-                    boolean provisioned = false;
-                    try {
-                      if (!visited.contains(current) && goalIdentified.get() == false) {
-                          visited.add(current);
-                          provisioned = true;
-                      }
-                    } finally {
-                      mutex.release();             
-                      if (provisioned == true && goalIdentified.get() == false) { 
-                          maze.move(player, current);
-                          for (int nb: maze.neighbors(current)) {
-                              frontier.push(nb);
-                              if (!visited.contains(nb))
-                                  predecessor.put(nb, current);
-                          }
-                      }
+        if (!visited.contains(start)) {         // If start wasn't visited
+            int player = maze.newPlayer(start); // Initialize player avatar
+            frontier.push(start);               // Push start node to stack
+            while (!frontier.empty()) {         // As long as not all nodes have been
+                                                // processed
+                int current = frontier.pop();   // Pop the first node in the stack
+                                                // to process (LIFO)
+               // Check if the current node is a goal, and if true
+                if (goalIdentified.get() == false 
+                        && maze.hasGoal(current)) {
+                    if (mutex.tryAcquire()) {     // Halt thread propagation,
+                        goalIdentified.set(true); // designate and return goal path to origin node
+                        maze.move(player, current);
+                        mutex.release();
+                        return pathFromTo(origin, current);
                     }
-                  } catch(InterruptedException ie) {
-                    // ...
-                  }
+                }
                 
-                if((maze.neighbors(current).size() > 2 || maze.neighbors(current).size() == 2 && visited.size() == 1 ) && goalIdentified.get() == false) {
-                    List<ForkJoinSolver> forkedTasks = spawnForks();
-                    for(ForkJoinSolver task : forkedTasks) {
-                        List<Integer> result = task.join();
-                        if(result != null) {           // if result is null and/or global path was found
-                            return result;
+               // Otherwise, check if the node was already visited
+                if (goalIdentified.get() == false 
+                        && !visited.contains(current)) { // If it wasn't visited, then
+                    try {
+                        // Lock in shared resource
+                        mutex.acquire();
+                        boolean provisioned = false;
+                        try {
+                            if (!visited.contains(current) && goalIdentified.get() == false) {
+                                visited.add(current); // Designate visited node
+                                provisioned = true;
+                            }
+                        } finally {
+                            mutex.release();
+                            if (provisioned == true && goalIdentified.get() == false) {
+                                maze.move(player, current); // Move player avatar
+                                for (int nb : maze.neighbors(current)) {
+                                    frontier.push(nb);         // Add neighbor to frontier stack
+                                    if (!visited.contains(nb)) // and designate predecessor
+                                        predecessor.put(nb, current);
+                                }
+                            }
+                        }
+                    } catch (InterruptedException ie) {
+                        ie.printStackTrace();
+                    }
+
+                    // Check neighboring nodes and check if forking is necessary,
+                    // as well as return the final result (null or path to origin)
+                    if ((maze.neighbors(current).size() > 2
+                            || maze.neighbors(current).size() == 2 && visited.size() == 1)
+                            && goalIdentified.get() == false) {
+                        List<ForkJoinSolver> forkedTasks = spawnForks();
+                        for (ForkJoinSolver task : forkedTasks) {
+                            List<Integer> result = task.join();
+                            if (result != null) { // if result is null and/or
+                                                  // global path was found
+                                return result;
+                            }
                         }
                     }
                 }
             }
         }
-        // all nodes explored, no goal found
-        }
         return null;
     }
-    
+
+    // Spawn forks based on number of unvisited frontier neighbor nodes
     private List<ForkJoinSolver> spawnForks() {
         List<ForkJoinSolver> spread = new ArrayList<>();
         for (int i = 0; i < this.frontier.size(); i++) {
@@ -161,6 +180,20 @@ public class ForkJoinSolver
         return spread;
     }
 
+    /**
+     * Returns the connected path, as a list of node identifiers, that
+     * goes from node <code>from</code> to node <code>to</code>
+     * following the inverse of relation <code>predecessor</code>. If
+     * such a path cannot be reconstructed from
+     * <code>predecessor</code>, the method returns <code>null</code>.
+     *
+     * @param from   the identifier of the initial node on the path
+     * @param to     the identifier of the final node on the path
+     * @return       the list of node identifiers from <code>from</code> to
+     *               <code>to</code> if such a path can be reconstructed from
+     *               <code>predecessor</code>; <code>null</code> otherwise
+     */
+    @Override
     protected List<Integer> pathFromTo(int from, int to) {
         List<Integer> path = new LinkedList<>();
         Integer current = to;

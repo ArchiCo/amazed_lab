@@ -124,7 +124,7 @@ public class ForkJoinSolver extends SequentialSolver {
                           List<ForkJoinSolver> forkedTasks = spawnForks();
                           for(ForkJoinSolver task : forkedTasks) {
                               List<Integer> result = task.join();
-                              if(result != null) {                  // if result is null and/or global path was found
+                              if(result != null) {           // if result is null and/or global path was found
                                   return Stream.concat(pathFromTo(start, current)
                                                .stream(), result.stream()).collect(Collectors.toList());
                               }

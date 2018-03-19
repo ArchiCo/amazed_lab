@@ -179,4 +179,18 @@ public class SequentialSolver
         Collections.reverse(path);
         return path;
     }
+    
+    /* protected List<Integer> pathFromTo(int from, int to) {
+    List<Integer> path = new LinkedList<>();
+    Integer current = to;
+    while (current != from) {
+        path.add(current);
+        current = predecessor.get(current);
+        if (current == null)
+            return null;
+    }
+    path.add(from);
+    Collections.reverse(path);
+    return path;
+}*/
 }

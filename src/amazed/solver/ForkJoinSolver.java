@@ -120,7 +120,7 @@ public class ForkJoinSolver
                         List<ForkJoinSolver> forkedTasks = spawnForks();
                         for (ForkJoinSolver task : forkedTasks) {
                             List<Integer> result = task.join();
-                            if (result != null) { // if result is null and/or global path was found
+                            if (!result.isEmpty() && result != null) { // if result is null and/or global path was found
                                 List<Integer> currentSection = pathFromTo(start, current);
                                 currentSection.addAll(result);
                                 return currentSection; 
@@ -130,12 +130,12 @@ public class ForkJoinSolver
                 }
             }
         }
-        return null;
+        return new LinkedList<>();
     }
 
     // Spawn forks based on number of unvisited frontier neighbor nodes
     private List<ForkJoinSolver> spawnForks() {
-        List<ForkJoinSolver> spread = new ArrayList<>();
+        List<ForkJoinSolver> spread = new LinkedList<>();
         for (int i = 0; i < this.frontier.size(); i++) {
             if (!visited.contains(frontier.get(i)) && frontier.get(i) != null ) {
                 spread.add(new ForkJoinSolver(this, frontier.get(i), forkAfter));
@@ -164,8 +164,10 @@ public class ForkJoinSolver
         while (current != from) {
             path.add(current);
             current = predecessor.get(current);
-            if (current == null)
-                return null;
+            if (current == null) {
+                System.out.println("Error in From (" + from + ") : To (" + to + ")");
+                return new LinkedList<>();
+            }
         }
         path.add(from);
         Collections.reverse(path);
